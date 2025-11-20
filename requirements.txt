@@ -1,0 +1,1 @@
+streamlit\nllama-index\nllama-index-llms-llama-cpp\nllama-index-embeddings-huggingface\nsentence-transformers\nllama-cpp-python
