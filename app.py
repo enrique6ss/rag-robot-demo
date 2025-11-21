@@ -6,11 +6,11 @@ import os
 
 # Local Llama-3
 llm = LlamaCPP(
-    model_url="https://huggingface.co/bartowski/Meta-Llama-3.1-3B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-3B-Instruct-Q2_K.gguf",
+    model_url="https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4_0.gguf",
     temperature=0.1,
     max_new_tokens=512,
-    context_window=2048,  # Keeps memory low
-    model_kwargs={"n_gpu_layers": 0, "n_batch": 256, "n_ctx": 2048},
+    context_window=2048,
+    model_kwargs={"n_gpu_layers": 0, "n_batch": 256},
     verbose=False
 )
 
