@@ -6,12 +6,11 @@ import os
 
 # Local Llama-3
 llm = LlamaCPP(
-    # Auto-downloads the model from Hugging Face the first time
-    model_url="https://huggingface.co/TheBloke/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    model_url="https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
     temperature=0.1,
     max_new_tokens=512,
-    context_window=8192,
-    model_kwargs={"n_gpu_layers": 0},
+    context_window=4096,
+    model_kwargs={"n_gpu_layers": 0, "n_batch": 512},
     verbose=False
 )
 
