@@ -1,26 +1,16 @@
-from llama_index.llms.llama_cpp import LlamaCPP
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-import streamlit as st
 import os
+import streamlit as st
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+from llama_index.llms.groq import Groq
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-# Local Llama-3
-llm = LlamaCPP(
-    model_url="https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4_0.gguf",
-    temperature=0.1,
-    max_new_tokens=512,
-    context_window=2048,
-    model_kwargs={"n_gpu_layers": 0, "n_batch": 256},
-    verbose=False
-)
+llm = Groq(model="llama3-70b-8192", api_key=st.secrets["GROQ_API_KEY"])
 
-# Fix embedding dimension for 2025 defaults
 Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 data_folder = "data"
 os.makedirs(data_folder, exist_ok=True)
 
-# Build or load index locally (no Pinecone needed)
 if not os.path.exists("storage"):
     documents = SimpleDirectoryReader(data_folder).load_data()
     index = VectorStoreIndex.from_documents(documents)
@@ -33,21 +23,21 @@ else:
 
 query_engine = index.as_query_engine(llm=llm)
 
-# Streamlit UI
-st.title("RAG Robot - Working Version")
+st.title("RAG Robot – Groq 70B")
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 if prompt := st.chat_input("Ask about your files"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Thinking"):
             response = query_engine.query(prompt)
             st.markdown(response)
-    st.session_state.messages.append({"role": "assistant", "content": str(response)})
+    st.session_state.messages.append({"role": "assistant", "content": str(response))
