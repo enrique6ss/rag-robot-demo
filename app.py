@@ -6,7 +6,12 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 # === CONFIG ===
 llm = Groq(model="llama3-70b-8192", api_key=st.secrets["GROQ_API_KEY"])
-Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+
+# Force CPU device for embeddings (fixes Streamlit Cloud CPU-only error)
+Settings.embed_model = HuggingFaceEmbedding(
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    device="cpu"  # Explicit CPU to avoid torch NotImplementedError
+)
 
 data_folder = "data"
 storage_dir = "storage"
@@ -15,7 +20,7 @@ os.makedirs(storage_dir, exist_ok=True)
 
 # === SAFE INDEX CREATION ===
 def get_index():
-    if os.path.exists(storage_dir) and any(f.endswith('.json') for f in os.listdir(storage_dir)):
+    if os.path.exists(storage_dir) and any(f.endswith(('.json', '.bin')) for f in os.listdir(storage_dir)):
         sc = StorageContext.from_defaults(persist_dir=storage_dir)
         return load_index_from_storage(sc)
     else:
