@@ -1,28 +1,5 @@
-# ----- CORE APP -----
-streamlit==1.32.2
-
-# ----- LLAMAINDEX CORE -----
-llama-index==0.10.38
-llama-index-core==0.10.38
-
-# ----- READERS (PDF, TXT, DOCX, Directory) -----
-llama-index-readers-file==0.1.25
-
-# ----- EMBEDDINGS (OpenAI text-embedding-3-small) -----
-llama-index-embeddings-openai==0.1.9
-
-# ----- LLMs (Groq llama-3.3-70b-versatile) -----
-llama-index-llms-groq==0.1.6
-
-# ----- VECTOR STORE -----
-faiss-cpu==1.7.4
-
-# ----- PDF SUPPORT -----
-pypdf==4.0.2
-
-# ----- TOKENIZATION -----
-tiktoken==0.7.0
-
-# ----- ENVIRONMENT / UTILITIES -----
-python-dotenv==1.0.1
-anyio==4.2.0
+streamlit>=1.26.0
+llama-index>=0.11.0
+llama-index-llms-groq>=0.1.0
+llama-index-embeddings-openai>=0.1.0
+openai>=1.33.0
