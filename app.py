@@ -17,22 +17,30 @@ storage_dir = "storage"
 os.makedirs(data_folder, exist_ok=True)
 os.makedirs(storage_dir, exist_ok=True)
 
+# === ALWAYS CREATE A DUMMY FILE SO IT NEVER SAYS "NO FILES" ===
+dummy_file = os.path.join(data_folder, "start.txt")
+if not os.path.exists(dummy_file):
+    with open(dummy_file, "w") as f:
+        f.write("Upload your files above to begin.")
+
 @st.cache_resource
 def get_index():
     docs = SimpleDirectoryReader(input_dir=data_folder).load_data()
     return VectorStoreIndex.from_documents(docs)
 
-if uploaded := st.file_uploader("Upload files", accept_multiple_files=True):
+# Rebuild when files are uploaded
+if uploaded := st.file_uploader("Upload PDFs / TXT / DOCX", accept_multiple_files=True):
     for f in uploaded:
         with open(os.path.join(data_folder, f.name), "wb") as f_out:
             f_out.write(f.getbuffer())
     st.success("Uploaded! Building index (45–90 sec first time)…")
-    get_index.clear()  # force rebuild
+    get_index.clear()
     st.rerun()
 
 index = get_index()
 query_engine = index.as_query_engine(similarity_top_k=3)
 
+# === UI ===
 st.title("Your Private Document AI – Groq 70B")
 
 if "messages" not in st.session_state:
@@ -42,7 +50,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask about your files"):
+if prompt := st.chat_input("Ask about your documents"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
