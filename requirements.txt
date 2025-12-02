@@ -1,5 +1,4 @@
 streamlit
 llama-index>=0.11.0
 llama-index-llms-groq
-llama-index-embeddings-huggingface
-sentence-transformers
+llama-index-embeddings-groq
