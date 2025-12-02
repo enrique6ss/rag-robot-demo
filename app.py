@@ -5,9 +5,9 @@ from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 # Config
-llm = Groq(model="llama3-70b-8192", api_key=st.secrets["GROQ_API_KEY"])
+llm = Groq(model="llama3-70b-8192", api_key=os.getenv("GROQ_API_KEY"))
 Settings.llm = llm
-Settings.embed_model = OpenAIEmbedding(api_key=st.secrets["OPENAI_API_KEY"])
+Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
 data_folder = "data"
 os.makedirs(data_folder, exist_ok=True)
