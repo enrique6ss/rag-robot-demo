@@ -3,7 +3,7 @@ import streamlit as st
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
-from llama_index.query_engine import ResponseMode
+from llama_index.indices.query.schema import ResponseMode
 from llama_index.indices.summary.base import SummaryIndex
 
 # --- Configuration ---
