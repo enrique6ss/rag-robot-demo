@@ -4,82 +4,59 @@ from llama_index.core import VectorStoreIndex, Settings
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-# --------------------------
-# CONFIG
-# --------------------------
-
-llm = Groq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
+# --- Configuration ---
+llm = Groq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
 Settings.llm = llm
 Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+data_folder = "data"
+os.makedirs(data_folder, exist_ok=True)
 
-# Add a dummy file so the folder is never empty
-dummy = os.path.join(DATA_DIR, "start.txt")
+# Dummy file so folder is never empty
+dummy = os.path.join(data_folder, "start.txt")
 if not os.path.exists(dummy):
     with open(dummy, "w") as f:
-        f.write("Start indexing.")
+        f.write("Upload your documents to begin.")
 
-
-# --------------------------
-# INDEX (CACHED)
-# --------------------------
-
-@st.cache_resource(show_spinner="Building index…")
+# --- Index building with caching ---
+@st.cache_resource(show_spinner="Building index (first time may take ~10-25s)…")
 def build_index():
     from llama_index.core import SimpleDirectoryReader
-
-    docs = SimpleDirectoryReader(input_dir=DATA_DIR, recursive=True).load_data()
+    docs = SimpleDirectoryReader(input_dir=data_folder, recursive=True).load_data()
     return VectorStoreIndex.from_documents(docs)
 
-
-# --------------------------
-# UI
-# --------------------------
-
-st.title("Private Document AI — Groq 70B")
-
-uploaded_files = st.file_uploader("Upload PDF / TXT / DOCX", accept_multiple_files=True)
-
+# --- Upload PDFs / TXT / DOCX ---
+uploaded_files = st.file_uploader("Upload PDFs / TXT / DOCX", accept_multiple_files=True)
 if uploaded_files:
     for f in uploaded_files:
-        with open(os.path.join(DATA_DIR, f.name), "wb") as out:
+        path = os.path.join(data_folder, f.name)
+        with open(path, "wb") as out:
             out.write(f.getbuffer())
+    st.success("Files uploaded – index will rebuild automatically.")
+    build_index.clear()  # Forces fresh index rebuild on next access
 
-    st.success("Uploaded — rebuilding index…")
-    build_index.clear()     # Clear cache so index rebuilds
-    st.rerun()              # Restart page to load new index
-
-
-# Load index
+# --- Build or reload index ---
 index = build_index()
 query_engine = index.as_query_engine(similarity_top_k=3)
 
-# Chat history
+# --- Streamlit chat UI ---
+st.title("Your Private Document AI – Groq 70B")
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Display previous messages
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
 # Chat input
-if prompt := st.chat_input("Ask anything about your documents"):
+if prompt := st.chat_input("Ask anything about your files"):
     st.session_state.messages.append({"role": "user", "content": prompt})
-
     with st.chat_message("user"):
         st.markdown(prompt)
-
     with st.chat_message("assistant"):
-        with st.spinner("Thinking…"):
+        with st.spinner("Generating response…"):
             response = query_engine.query(prompt)
-            answer = str(response)
-
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.session_state.messages.append({"role": "assistant", "content": str(response)})
+            st.markdown(str(response))
