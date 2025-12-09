@@ -1,221 +1,189 @@
 import os
 import streamlit as st
-import base64
-from llama_index.core import VectorStoreIndex, Document, Settings
+from llama_index.core import VectorStoreIndex, Settings, Document
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
+
 import easyocr
 from pdf2image import convert_from_path
-import tempfile
+from docx import Document as DocxDocument
 
-# ============================================================
-#   LEXISCAN AI — DOCUMENT INTELLIGENCE PLATFORM (UI DESIGN)
-# ============================================================
+# =======================
+#    LEXISCAN BRANDING
+# =======================
 
-# ---- Gradient UI Styling ----
-st.markdown(
-    """
+st.set_page_config(
+    page_title="LexiScan AI — Document Intelligence Platform",
+    layout="wide",
+)
+
+# Custom dark-blue gradient CSS
+st.markdown("""
     <style>
-
-    /* Global gradient background */
-    .stApp {
-        background: linear-gradient(135deg, #0f0f17 0%, #1b1b2e 40%, #2d2d44 100%);
-        color: #f5f5f5 !important;
-        font-family: 'Inter', sans-serif;
-    }
-
-    /* Card-style container */
-    .main-container {
-        background: rgba(255, 255, 255, 0.05);
-        padding: 28px;
-        border-radius: 18px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(7px);
-    }
-
-    /* Title styling */
-    .title-text {
-        font-size: 42px;
-        font-weight: 700;
-        text-align: center;
-        background: linear-gradient(to right, #8ab4ff, #b388ff);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 8px;
-    }
-
-    .subtitle-text {
-        text-align: center;
-        font-size: 18px;
-        color: #d3d3d3;
-        margin-bottom: 30px;
-    }
-
-    /* Chat messages */
-    .stChatMessage {
-        background: rgba(255, 255, 255, 0.04) !important;
-        padding: 18px !important;
-        border-radius: 14px !important;
-        border: 1px solid rgba(255, 255, 255, 0.06) !important;
-    }
-
+        body {
+            background: linear-gradient(135deg, #0A1A2F, #112A45, #0C1623);
+            color: white !important;
+        }
+        .stButton>button {
+            background: #1B3B5F;
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 8px;
+            border: 1px solid #355079;
+        }
+        .stTextInput>div>div>input {
+            background-color: #112233;
+            color: white;
+        }
+        .stChatMessage {
+            background-color: #112233 !important;
+            border-radius: 10px;
+            padding: 12px;
+        }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# UI Header
-st.markdown("<div class='title-text'>LexiScan AI</div>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle-text'>Document Intelligence Platform</div>", unsafe_allow_html=True)
-st.markdown("<div class='main-container'>", unsafe_allow_html=True)
+st.title("LexiScan AI — Document Intelligence Platform")
+st.write("Upload contracts, agreements, NDAs, or legal documents. Ask anything. Instant intelligence.")
 
+# =======================
+#    LLM + EMBEDDINGS
+# =======================
 
-# ============================================================
-#                  LLM + Embedding Configuration
-# ============================================================
-
-llm = Groq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
+llm = Groq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
 Settings.llm = llm
 Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Ensure data directory exists
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+# =======================
+#    STORAGE FOLDER
+# =======================
 
-# EasyOCR reader
+DATA_FOLDER = "data"
+os.makedirs(DATA_FOLDER, exist_ok=True)
+
+# =======================
+#    OCR SETUP
+# =======================
+
 reader = easyocr.Reader(["en"], gpu=False)
 
-
-# ============================================================
-#               OCR + TEXT EXTRACTION FUNCTIONS
-# ============================================================
-
-def extract_text_pdf(file_path):
-    """Hybrid text extraction: direct text + EasyOCR fallback."""
-    text_output = ""
-
+def extract_text_pdf(path):
+    """Hybrid PDF extraction: try text → fallback to EasyOCR."""
     try:
-        pages = convert_from_path(file_path)
-    except Exception:
-        return ""
+        from PyPDF2 import PdfReader
+        raw = PdfReader(path)
+        text = ""
+        for page in raw.pages:
+            text += page.extract_text() or ""
+        if text.strip():
+            return text  # SUCCESS, no OCR needed
+    except:
+        pass  # go to OCR fallback
 
-    for page_img in pages:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            page_img.save(tmp.name, "PNG")
-            ocr_result = reader.readtext(tmp.name, detail=0)
-            text_output += "\n".join(ocr_result) + "\n"
-
-    return text_output
-
-
-def extract_text(file_path):
-    """Route by file extension."""
-    ext = file_path.lower()
-
-    if ext.endswith(".pdf"):
-        return extract_text_pdf(file_path)
-    elif ext.endswith(".txt"):
-        return open(file_path, "r", encoding="utf-8", errors="ignore").read()
-    else:
-        return ""
+    # ---- FALLBACK TO EASYOCR ----
+    images = convert_from_path(path)
+    text = ""
+    for img in images:
+        text += " ".join(reader.readtext(img, detail=0)) + "\n"
+    return text
 
 
-# ============================================================
-#                  INDEX BUILDING FUNCTION
-# ============================================================
+def extract_docx(path):
+    doc = DocxDocument(path)
+    return "\n".join([p.text for p in doc.paragraphs])
 
-@st.cache_resource(show_spinner="Rebuilding Document Intelligence Index…")
+
+def extract_txt(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# =======================
+#      BUILD INDEX
+# =======================
+
+@st.cache_resource(show_spinner="Rebuilding intelligence index…")
 def build_index():
     docs = []
 
-    file_list = os.listdir(DATA_DIR)
+    file_list = os.listdir(DATA_FOLDER)
     if not file_list:
-        return VectorStoreIndex([])
+        return VectorStoreIndex.from_documents([Document("Upload a document to begin.")])
 
-    for filename in file_list:
-        filepath = os.path.join(DATA_DIR, filename)
+    for f in file_list:
+        path = os.path.join(DATA_FOLDER, f)
 
-        try:
-            extracted = extract_text(filepath)
-            if extracted.strip():
-                docs.append(Document(text=extracted, doc_id=filename))
-        except Exception as e:
-            print("Extraction failed:", e)
+        if f.lower().endswith(".pdf"):
+            text = extract_text_pdf(path)
+        elif f.lower().endswith(".docx"):
+            text = extract_docx(path)
+        elif f.lower().endswith(".txt"):
+            text = extract_txt(path)
+        else:
+            continue
 
-    if not docs:
-        docs.append(Document("No readable text found.", doc_id="empty"))
+        docs.append(Document(text, doc_id=f))
 
     return VectorStoreIndex.from_documents(docs)
 
 
-# ============================================================
-#                         FILE UPLOAD
-# ============================================================
+# =======================
+#      FILE UPLOAD
+# =======================
 
-uploaded_files = st.file_uploader(
-    "Upload Documents (PDF, TXT)",
-    type=["pdf", "txt"],
-    accept_multiple_files=True
-)
-
-if uploaded_files:
-    for uploaded in uploaded_files:
-        file_path = os.path.join(DATA_DIR, uploaded.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-
-    st.success("Documents uploaded. Rebuilding intelligence index…")
+uploaded = st.file_uploader("Upload PDF, DOCX, or TXT", accept_multiple_files=True)
+if uploaded:
+    for f in uploaded:
+        with open(os.path.join(DATA_FOLDER, f.name), "wb") as out:
+            out.write(f.getbuffer())
+    st.success("Files uploaded successfully. Index will rebuild.")
     build_index.clear()
 
 
-# ============================================================
-#                     BUILD / LOAD INDEX
-# ============================================================
+# =======================
+#      BUILD INDEX NOW
+# =======================
 
 index = build_index()
 query_engine = index.as_query_engine(similarity_top_k=3)
 
-
-# ============================================================
-#                        CHAT INTERFACE
-# ============================================================
+# =======================
+#       CHAT UI
+# =======================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Show history
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-
-prompt = st.chat_input("Ask LexiScan AI anything about your uploaded documents…")
-
+# Chat
+prompt = st.chat_input("Ask LexiScan AI anything about your documents...")
 if prompt:
-    # Store user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate AI response
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing documents…"):
+        with st.spinner("Analyzing…"):
             response = query_engine.query(prompt)
             answer = str(response)
-
-            st.session_state.messages.append({"role": "assistant", "content": answer})
             st.markdown(answer)
 
-            # Download button
-            st.download_button(
-                label="Download Response",
-                data=answer,
-                file_name="LexiScan_Response.txt",
-                mime="text/plain"
-            )
+            st.session_state.messages.append({"role": "assistant", "content": answer})
 
-st.markdown("</div>", unsafe_allow_html=True)
+            # Show sources
+            if hasattr(response, "source_nodes"):
+                st.markdown("### Sources")
+                for n in response.source_nodes:
+                    st.markdown(f"- {n.node.get('doc_id')}")
+
+            # Download answer
+            st.download_button(
+                "Download Answer",
+                answer,
+                "lexiscan_answer.txt",
+                "text/plain"
+            )
