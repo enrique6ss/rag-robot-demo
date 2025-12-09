@@ -1,5 +1,4 @@
 streamlit>=1.26.0
-
 llama-index>=0.11.0
 llama-index-llms-groq>=0.1.0
 llama-index-embeddings-openai>=0.1.0
@@ -7,5 +6,5 @@ openai>=1.33.0
 
 easyocr>=1.7.1
 pdf2image>=1.16.0
-python-docx>=0.8.11
-numpy>=1.24.0
+pillow>=10.0.0
+numpy>=1.26.0
