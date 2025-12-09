@@ -3,187 +3,181 @@ import streamlit as st
 from llama_index.core import VectorStoreIndex, Settings, Document
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
-
 import easyocr
 from pdf2image import convert_from_path
-from docx import Document as DocxDocument
 
-# =======================
-#    LEXISCAN BRANDING
-# =======================
+# ===========================
+#   SETTINGS / CONFIG
+# ===========================
 
 st.set_page_config(
     page_title="LexiScan AI — Document Intelligence Platform",
     layout="wide",
 )
 
-# Custom dark-blue gradient CSS
+# DARK BLUE GRADIENT UI
 st.markdown("""
-    <style>
-        body {
-            background: linear-gradient(135deg, #0A1A2F, #112A45, #0C1623);
-            color: white !important;
-        }
-        .stButton>button {
-            background: #1B3B5F;
-            color: white;
-            padding: 0.6rem 1.2rem;
-            border-radius: 8px;
-            border: 1px solid #355079;
-        }
-        .stTextInput>div>div>input {
-            background-color: #112233;
-            color: white;
-        }
-        .stChatMessage {
-            background-color: #112233 !important;
-            border-radius: 10px;
-            padding: 12px;
-        }
-    </style>
+<style>
+body {
+    background: linear-gradient(160deg, #0A0F2D 0%, #0F1A45 50%, #0A0F2D 100%);
+    color: #FFFFFF;
+}
+div.stButton > button {
+    background-color: #1C3FA8;
+    color: white;
+    border-radius: 8px;
+    padding: 0.6rem 1.2rem;
+    border: none;
+}
+.sidebar .sidebar-content {
+    background: #0A0F2D;
+}
+</style>
 """, unsafe_allow_html=True)
 
-st.title("LexiScan AI — Document Intelligence Platform")
-st.write("Upload contracts, agreements, NDAs, or legal documents. Ask anything. Instant intelligence.")
+# LLM CONFIG
+llm = Groq(
+    model="llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY")
+)
 
-# =======================
-#    LLM + EMBEDDINGS
-# =======================
-
-llm = Groq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
 Settings.llm = llm
 Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
-# =======================
-#    STORAGE FOLDER
-# =======================
+# DATA FOLDER
+data_folder = "data"
+os.makedirs(data_folder, exist_ok=True)
 
-DATA_FOLDER = "data"
-os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# =======================
-#    OCR SETUP
-# =======================
+# ===========================
+#   OCR + TEXT EXTRACTORS
+# ===========================
 
 reader = easyocr.Reader(["en"], gpu=False)
 
-def extract_text_pdf(path):
-    """Hybrid PDF extraction: try text → fallback to EasyOCR."""
+def extract_text_pdf(filepath):
+    """ Hybrid text extraction with OCR fallback """
     try:
-        from PyPDF2 import PdfReader
-        raw = PdfReader(path)
+        # Try native text extraction first
+        from pypdf import PdfReader
+        pdf = PdfReader(filepath)
         text = ""
-        for page in raw.pages:
-            text += page.extract_text() or ""
+        for page in pdf.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
         if text.strip():
-            return text  # SUCCESS, no OCR needed
+            return text
     except:
-        pass  # go to OCR fallback
+        pass
 
-    # ---- FALLBACK TO EASYOCR ----
-    images = convert_from_path(path)
+    # Fallback to OCR if text extraction failed
     text = ""
+    images = convert_from_path(filepath)
     for img in images:
-        text += " ".join(reader.readtext(img, detail=0)) + "\n"
+        ocr_result = reader.readtext(img, detail=0)
+        text += "\n".join(ocr_result) + "\n"
+
     return text
 
 
-def extract_docx(path):
-    doc = DocxDocument(path)
-    return "\n".join([p.text for p in doc.paragraphs])
+def extract_docx(filepath):
+    from docx import Document as DocxDoc
+    d = DocxDoc(filepath)
+    return "\n".join([p.text for p in d.paragraphs])
 
 
-def extract_txt(path):
-    with open(path, "r", encoding="utf-8") as f:
+def extract_txt(filepath):
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
 
-# =======================
-#      BUILD INDEX
-# =======================
+# ===========================
+#   BUILD INDEX (CACHED)
+# ===========================
 
 @st.cache_resource(show_spinner="Rebuilding intelligence index…")
 def build_index():
     docs = []
+    file_list = os.listdir(data_folder)
 
-    file_list = os.listdir(DATA_FOLDER)
     if not file_list:
-        return VectorStoreIndex.from_documents([Document("Upload a document to begin.")])
+        return VectorStoreIndex.from_documents(
+            [Document(text="Upload a document to begin.", metadata={})]
+        )
 
-    for f in file_list:
-        path = os.path.join(DATA_FOLDER, f)
+    for filename in file_list:
+        filepath = os.path.join(data_folder, filename)
 
-        if f.lower().endswith(".pdf"):
-            text = extract_text_pdf(path)
-        elif f.lower().endswith(".docx"):
-            text = extract_docx(path)
-        elif f.lower().endswith(".txt"):
-            text = extract_txt(path)
+        if filename.lower().endswith(".pdf"):
+            text = extract_text_pdf(filepath)
+
+        elif filename.lower().endswith(".docx"):
+            text = extract_docx(filepath)
+
+        elif filename.lower().endswith(".txt"):
+            text = extract_txt(filepath)
+
         else:
             continue
 
-        docs.append(Document(text, doc_id=f))
+        docs.append(Document(text=text, metadata={"filename": filename}))
 
     return VectorStoreIndex.from_documents(docs)
 
 
-# =======================
-#      FILE UPLOAD
-# =======================
+# ===========================
+#            UI
+# ===========================
 
-uploaded = st.file_uploader("Upload PDF, DOCX, or TXT", accept_multiple_files=True)
-if uploaded:
-    for f in uploaded:
-        with open(os.path.join(DATA_FOLDER, f.name), "wb") as out:
+st.title("LexiScan AI — Document Intelligence Platform")
+st.markdown("### Upload contracts, agreements, NDAs, or any documents. Ask anything instantly.")
+
+uploaded_files = st.file_uploader(
+    "Upload documents",
+    type=["pdf", "txt", "docx"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    for f in uploaded_files:
+        with open(os.path.join(data_folder, f.name), "wb") as out:
             out.write(f.getbuffer())
-    st.success("Files uploaded successfully. Index will rebuild.")
+
+    st.success("Documents uploaded successfully. Rebuilding intelligence index…")
     build_index.clear()
 
-
-# =======================
-#      BUILD INDEX NOW
-# =======================
 
 index = build_index()
 query_engine = index.as_query_engine(similarity_top_k=3)
 
-# =======================
-#       CHAT UI
-# =======================
-
+# CHAT
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Show history
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# Chat
-prompt = st.chat_input("Ask LexiScan AI anything about your documents...")
+prompt = st.chat_input("Ask anything about your documents…")
+
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing…"):
+        with st.spinner("Analyzing documents…"):
             response = query_engine.query(prompt)
             answer = str(response)
-            st.markdown(answer)
 
             st.session_state.messages.append({"role": "assistant", "content": answer})
+            st.markdown(answer)
 
-            # Show sources
+            # Sources
             if hasattr(response, "source_nodes"):
-                st.markdown("### Sources")
-                for n in response.source_nodes:
-                    st.markdown(f"- {n.node.get('doc_id')}")
+                st.markdown("### Sources:")
+                for node in response.source_nodes:
+                    fname = node.node.metadata.get("filename", "Unknown")
+                    st.markdown(f"- {fname}")
 
-            # Download answer
-            st.download_button(
-                "Download Answer",
-                answer,
-                "lexiscan_answer.txt",
-                "text/plain"
-            )
