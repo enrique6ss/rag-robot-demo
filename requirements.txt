@@ -1,9 +1,10 @@
 streamlit>=1.26.0
-llama-index>=0.11.0
+llama-index==0.10.16
 llama-index-llms-groq>=0.1.0
 llama-index-embeddings-openai>=0.1.0
 openai>=1.33.0
-easyocr
-pdf2image
-pillow
+easyocr>=1.7.1
+pdf2image>=1.17.0
+python-docx>=0.8.11
+PyPDF2>=3.0.0
 poppler-utils
