@@ -2,256 +2,235 @@ import os
 import numpy as np
 import streamlit as st
 
-from llama_index.core import VectorStoreIndex, Settings, Document
+from llama_index.core import VectorStoreIndex, Settings
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
 
 from pdf2image import convert_from_path
 import easyocr
-from docx import Document as DocxDocument
 
-# --------------------- PAGE CONFIG & DARK THEME --------------------- #
+# =========================
+# Page / Theme
+# =========================
 st.set_page_config(
-    page_title="LexiDoc AI Review",
-    page_icon="📑",
+    page_title="ClausePilot AI",
     layout="wide",
 )
 
-# Custom dark theme + simple card styling
+# Dark theme overrides
 st.markdown(
     """
     <style>
-    body {
-        background-color: #020617;
-    }
-    .main {
-        background-color: #020617;
-        color: #e5e7eb;
-    }
     .stApp {
-        background: radial-gradient(circle at top, #1e293b 0, #020617 55%);
-        color: #e5e7eb !important;
+        background-color: #0e1117;
+        color: #f5f5f5;
     }
-    .lex-header {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #e5e7eb;
-        margin-bottom: 0.25rem;
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
     }
-    .lex-subheader {
-        font-size: 0.95rem;
-        color: #9ca3af;
-        margin-bottom: 1.5rem;
+    h1, h2, h3, h4 {
+        color: #f5f5f5;
     }
-    .lex-card {
-        background-color: #020617;
-        border-radius: 16px;
-        padding: 1rem 1.25rem;
-        border: 1px solid #1f2937;
-        box-shadow: 0 18px 40px rgba(0,0,0,0.45);
-    }
-    .lex-tag {
-        display: inline-block;
-        padding: 0.25rem 0.6rem;
-        border-radius: 999px;
-        background: #111827;
-        font-size: 0.75rem;
-        color: #9ca3af;
-        margin-right: 0.35rem;
+    .sidebar .sidebar-content {
+        background-color: #111827;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# --------------------- CONFIG: LLM & EMBEDDINGS --------------------- #
-
-llm = Groq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+# =========================
+# LLM + Embeddings Config
+# =========================
+llm = Groq(
+    model="llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY"),
+)
 Settings.llm = llm
 Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
-DATA_FOLDER = "data"
-os.makedirs(DATA_FOLDER, exist_ok=True)
+data_folder = "data"
+os.makedirs(data_folder, exist_ok=True)
 
-# --------------------- OCR HELPERS (EASYOCR) --------------------- #
+# Make sure folder is never empty
+dummy_path = os.path.join(data_folder, "start.txt")
+if not os.path.exists(dummy_path):
+    with open(dummy_path, "w") as f:
+        f.write("Upload your documents to begin.")
 
-@st.cache_resource(show_spinner=False)
-def get_ocr_reader():
-    # English only; set gpu=True if you know the machine has a GPU
+# =========================
+# OCR Helpers (EasyOCR)
+# =========================
+
+@st.cache_resource
+def get_easyocr_reader():
+    # English only; set gpu=True if you know Railway has GPU
     return easyocr.Reader(["en"], gpu=False)
 
-def extract_pdf_text_with_ocr(filepath: str) -> str:
-    """Extract text from a PDF using EasyOCR on rendered images."""
-    images = convert_from_path(filepath)
-    reader = get_ocr_reader()
 
-    all_chunks = []
-    for img in images:
-        np_img = np.array(img)
-        # detail=0 → just the text, paragraph=True → combine blocks
-        result = reader.readtext(np_img, detail=0, paragraph=True)
-        all_chunks.extend(result)
+def ocr_pdf_with_easyocr(pdf_path: str) -> str:
+    """
+    Fallback OCR for scanned PDFs:
+    - Converts each page to image
+    - Runs EasyOCR on each page
+    - Returns concatenated text
+    """
+    reader = get_easyocr_reader()
+    pages = convert_from_path(pdf_path)
+    all_text_parts = []
 
-    return "\n".join(all_chunks)
+    for page_img in pages:
+        img_np = np.array(page_img)
+        result = reader.readtext(img_np, detail=0, paragraph=True)
+        # result is already a list of strings
+        page_text = " ".join(result).strip()
+        if page_text:
+            all_text_parts.append(page_text)
 
+    return "\n\n".join(all_text_parts).strip()
 
-def extract_docx_text(filepath: str) -> str:
-    doc = DocxDocument(filepath)
-    return "\n".join(p.text for p in doc.paragraphs)
+# =========================
+# Index building (Hybrid)
+# =========================
 
+@st.cache_resource(show_spinner="Building search index…")
+def build_index(similarity_top_k: int = 3):
+    """
+    Hybrid strategy:
+    1) Use LlamaIndex's normal loaders (fast for digital PDFs).
+    2) For any PDF that comes back basically empty, re-process that file
+       with EasyOCR and replace its text.
+    """
+    from llama_index.core import SimpleDirectoryReader
 
-def extract_txt_text(filepath: str) -> str:
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-        return f.read()
+    docs = SimpleDirectoryReader(
+        input_dir=data_folder,
+        recursive=True
+    ).load_data()
 
+    # If no real docs (only dummy), just index as-is
+    real_docs_exist = any(
+        os.path.basename(d.metadata.get("file_path", "")) != "start.txt"
+        for d in docs
+    )
 
-# --------------------- INDEX BUILDING --------------------- #
-
-@st.cache_resource(show_spinner="Building secure document index…")
-def build_index() -> VectorStoreIndex:
-    docs = []
-
-    for filename in os.listdir(DATA_FOLDER):
-        filepath = os.path.join(DATA_FOLDER, filename)
-        if not os.path.isfile(filepath):
-            continue
-
-        # Skip any hidden/system files
-        if filename.startswith("."):
-            continue
-
-        text = ""
-        try:
-            if filename.lower().endswith(".pdf"):
-                text = extract_pdf_text_with_ocr(filepath)
-            elif filename.lower().endswith(".docx"):
-                text = extract_docx_text(filepath)
-            elif filename.lower().endswith(".txt"):
-                text = extract_txt_text(filepath)
-            else:
-                # Skip unsupported extensions
+    if real_docs_exist:
+        for d in docs:
+            file_path = d.metadata.get("file_path")
+            if not file_path:
                 continue
-        except Exception as e:
-            # If OCR or parsing fails, skip that file but don’t crash the app
-            print(f"Error reading {filename}: {e}")
-            continue
 
-        if text.strip():
-            docs.append(
-                Document(
-                    text=text,
-                    metadata={"filename": filename},
-                )
+            # Skip dummy file
+            if os.path.basename(file_path) == "start.txt":
+                continue
+
+            # If text looks empty or too short, try OCR fallback for PDFs
+            text_len = len((d.text or "").strip())
+            if text_len < 50 and file_path.lower().endswith(".pdf"):
+                try:
+                    ocr_text = ocr_pdf_with_easyocr(file_path)
+                    if ocr_text:
+                        d.text = ocr_text
+                except Exception as e:
+                    # If OCR fails for any reason, keep whatever text we had
+                    print(f"OCR failed for {file_path}: {e}")
+
+    index = VectorStoreIndex.from_documents(docs)
+    return index.as_query_engine(similarity_top_k=similarity_top_k)
+
+# =========================
+# Sidebar (controls)
+# =========================
+
+st.sidebar.title("ClausePilot AI")
+st.sidebar.markdown(
+    "AI assistant for **contracts, NDAs, leases, and legal docs**.\n\n"
+    "- Upload PDFs / DOCX / TXT\n"
+    "- Ask natural-language questions\n"
+    "- Hybrid text + OCR fallback for scanned PDFs"
+)
+
+top_k = st.sidebar.slider("Matches per answer", min_value=1, max_value=10, value=3)
+
+if st.sidebar.button("Clear chat history"):
+    st.session_state.pop("messages", None)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Tip:** First time on a scanned PDF can take longer while OCR spins up.")
+
+# =========================
+# File Upload
+# =========================
+
+st.title("ClausePilot AI – Contract Q&A for Professionals")
+
+uploaded_files = st.file_uploader(
+    "Upload contracts / NDAs / leases (PDF, DOCX, TXT)",
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    for f in uploaded_files:
+        save_path = os.path.join(data_folder, f.name)
+        with open(save_path, "wb") as out:
+            out.write(f.getbuffer())
+    st.success("Files uploaded. Rebuilding the search index with hybrid OCR…")
+    # Clear cached index so next call rebuilds
+    build_index.clear()
+
+# =========================
+# Build / get query engine
+# =========================
+
+query_engine = build_index(similarity_top_k=top_k)
+
+# =========================
+# Chat UI
+# =========================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Show history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# New question
+prompt = st.chat_input("Ask a question about your uploaded documents")
+if prompt:
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Assistant answer
+    with st.chat_message("assistant"):
+        with st.spinner("Analyzing your documents…"):
+            response = query_engine.query(prompt)
+            answer_text = str(response)
+            st.markdown(answer_text)
+
+            # Save to history
+            st.session_state.messages.append(
+                {"role": "assistant", "content": answer_text}
             )
 
-    # Fallback placeholder so the index isn't empty
-    if not docs:
-        docs.append(
-            Document(
-                text="No documents have been uploaded yet.",
-                metadata={"filename": "placeholder"},
+            # Show sources if available
+            if hasattr(response, "source_nodes") and response.source_nodes:
+                st.markdown("**Sources used:**")
+                for node in response.source_nodes:
+                    # Try to show filename from metadata
+                    meta = getattr(node.node, "metadata", {}) or {}
+                    file_path = meta.get("file_path", "Unknown file")
+                    filename = os.path.basename(file_path)
+                    st.markdown(f"- `{filename}`")
+
+            # Download answer
+            st.download_button(
+                "Download this answer",
+                data=answer_text,
+                file_name="answer.txt",
+                mime="text/plain",
             )
-        )
-
-    return VectorStoreIndex.from_documents(docs)
-
-
-# --------------------- UI LAYOUT --------------------- #
-
-left, right = st.columns([2, 3])
-
-with left:
-    st.markdown('<div class="lex-card">', unsafe_allow_html=True)
-    st.markdown('<div class="lex-header">LexiDoc AI Review</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="lex-subheader">'
-        "Upload contracts, NDAs, leases, or legal PDFs. Ask natural-language questions and get instant, "
-        "cited answers — even from scanned documents."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div>
-            <span class="lex-tag">📑 OCR for scanned PDFs</span>
-            <span class="lex-tag">🔍 Clause & term search</span>
-            <span class="lex-tag">⚖️ Built for legal & real estate</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("### Upload documents")
-    uploaded_files = st.file_uploader(
-        "PDF, DOCX, or TXT",
-        type=["pdf", "docx", "txt"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
-
-    if uploaded_files:
-        for f in uploaded_files:
-            save_path = os.path.join(DATA_FOLDER, f.name)
-            with open(save_path, "wb") as out:
-                out.write(f.getbuffer())
-        st.success("Files uploaded. Rebuilding the index now…")
-        # Clear the cached index so it rebuilds with new docs
-        build_index.clear()
-
-    st.markdown("---")
-    st.markdown("**Tips for best results**")
-    st.markdown(
-        "- Upload one client / deal per batch of documents\n"
-        "- Ask specific questions: *“What is the termination clause?”*, "
-        "*“List all payment obligations for the tenant”*"
-    )
-
-with right:
-    # Build / load index (will rerun when cache is cleared)
-    index = build_index()
-    query_engine = index.as_query_engine(similarity_top_k=3)
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    # Chat history
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Chat input
-    prompt = st.chat_input("Ask a question about your uploaded documents…")
-
-    if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing your documents…"):
-                response = query_engine.query(prompt)
-                answer_text = str(response)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer_text}
-                )
-                st.markdown(answer_text)
-
-                # Show sources if available
-                if hasattr(response, "source_nodes") and response.source_nodes:
-                    st.markdown("**Sources used:**")
-                    for node in response.source_nodes:
-                        meta = getattr(node, "metadata", None) or getattr(
-                            getattr(node, "node", None), "metadata", {}
-                        ) or {}
-                        filename = meta.get("filename", "Unknown file")
-                        st.markdown(f"- `{filename}`")
-
-                # Download answer
-                st.download_button(
-                    label="Download answer as .txt",
-                    data=answer_text,
-                    file_name="lexidoc_answer.txt",
-                    mime="text/plain",
-                )
