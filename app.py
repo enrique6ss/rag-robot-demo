@@ -4,157 +4,140 @@ from llama_index.core import VectorStoreIndex, Document, Settings
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.openai import OpenAIEmbedding
 
-# OCR imports
-import pytesseract
+import easyocr
 from pdf2image import convert_from_path
 from docx import Document as DocxDocument
 
-# ----------------------------
-# PROFESSIONAL APP CONFIG
-# ----------------------------
-st.set_page_config(
-    page_title="LexiView AI — Document Intelligence Suite",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ================================
+# CONFIG
+# ================================
+st.set_page_config(page_title="AI Contract Reader", layout="wide")
 
-# Dark theme container
-st.markdown("""
-<style>
-    body { background-color: #0E1117; }
-    .stApp { background-color: #0E1117; color: white; }
-</style>
-""", unsafe_allow_html=True)
-
-# ----------------------------
-# LLM + Embeddings
-# ----------------------------
-llm = Groq(
-    model="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY")
-)
-
+llm = Groq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
 Settings.llm = llm
 Settings.embed_model = OpenAIEmbedding(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ----------------------------
-# STORAGE
-# ----------------------------
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+data_folder = "data"
+os.makedirs(data_folder, exist_ok=True)
 
-# Add a placeholder file so the folder isn't empty
-placeholder = os.path.join(DATA_DIR, "placeholder.txt")
-if not os.path.exists(placeholder):
-    with open(placeholder, "w") as f:
-        f.write("LexiView AI Initialized.")
+# Preload EasyOCR reader (English)
+@st.cache_resource
+def load_ocr_reader():
+    return easyocr.Reader(["en"], gpu=False)
 
-# ----------------------------
+reader = load_ocr_reader()
+
+# ================================
 # OCR HELPERS
-# ----------------------------
-def extract_pdf_text_with_ocr(path):
-    """Convert each PDF page to an image, then OCR it."""
-    text = ""
+# ================================
+
+def ocr_pdf(path):
+    """Extract text from any PDF using EasyOCR (works on scanned files)."""
     pages = convert_from_path(path)
+    text = ""
+
     for page in pages:
-        text += pytesseract.image_to_string(page) + "\n"
+        result = reader.readtext(page, detail=0)
+        text += "\n".join(result) + "\n"
+
     return text
 
-def extract_docx_text(path):
+
+def read_docx(path):
+    """Extract text from DOCX files."""
     doc = DocxDocument(path)
     return "\n".join([p.text for p in doc.paragraphs])
 
 
-# ----------------------------
-# BUILD VECTOR INDEX
-# ----------------------------
-@st.cache_resource(show_spinner="Indexing your documents…")
+def read_txt(path):
+    """Extract text from TXT files."""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# ================================
+# INDEXING
+# ================================
+
+@st.cache_resource(show_spinner="Building index…")
 def build_index():
     docs = []
-    for filename in os.listdir(DATA_DIR):
-        filepath = os.path.join(DATA_DIR, filename)
 
-        if filename.endswith(".pdf"):
-            text = extract_pdf_text_with_ocr(filepath)
-        elif filename.endswith(".txt"):
-            with open(filepath, "r", encoding="utf-8") as f:
-                text = f.read()
-        elif filename.endswith(".docx"):
-            text = extract_docx_text(filepath)
+    for filename in os.listdir(data_folder):
+        filepath = os.path.join(data_folder, filename)
+
+        if filename.lower().endswith(".pdf"):
+            text = ocr_pdf(filepath)
+        elif filename.lower().endswith(".docx"):
+            text = read_docx(filepath)
+        elif filename.lower().endswith(".txt"):
+            text = read_txt(filepath)
         else:
             continue
 
         docs.append(Document(text=text, doc_id=filename))
 
+    if not docs:
+        docs.append(Document("Upload a file to begin.", doc_id="empty"))
+
     return VectorStoreIndex.from_documents(docs)
 
 
-# ----------------------------
-# UI HEADER
-# ----------------------------
-st.title("📄 LexiView AI — Document Intelligence Suite")
-st.subheader("Secure AI-powered contract review, OCR scanning, clause extraction, and instant answers.")
+# ================================
+# UI
+# ================================
+st.title("🔍 AI Contract & Document Reader (OCR Enabled)")
+st.write("Upload scanned or digital PDFs, DOCX, or TXT files. Ask any question.")
 
 
-# ----------------------------
-# FILE UPLOAD
-# ----------------------------
-uploaded = st.file_uploader("Upload Contracts, Leases, NDAs, PDFs, Scanned Docs", accept_multiple_files=True)
+# Upload section
+uploaded_files = st.file_uploader("Upload files", type=["pdf", "txt", "docx"], accept_multiple_files=True)
 
-if uploaded:
-    for file in uploaded:
-        with open(os.path.join(DATA_DIR, file.name), "wb") as f:
+if uploaded_files:
+    for file in uploaded_files:
+        with open(os.path.join(data_folder, file.name), "wb") as f:
             f.write(file.getbuffer())
 
-    st.success("Documents uploaded. Rebuilding index…")
-    build_index.clear()
+    st.success("Files uploaded. Rebuilding index…")
+    build_index.clear()  # force rebuild
 
 
-# ----------------------------
-# LOAD INDEX
-# ----------------------------
+# Build index
 index = build_index()
 query_engine = index.as_query_engine(similarity_top_k=3)
 
-
-# ----------------------------
-# CHAT UI
-# ----------------------------
+# Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Print history
+# Show conversation
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
+        st.write(msg["content"])
 
 # Chat input
-if prompt := st.chat_input("Ask anything about your documents…"):
+prompt = st.chat_input("Ask anything about your documents…")
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing documents…"):
+        with st.spinner("Reading documents…"):
             response = query_engine.query(prompt)
             answer = str(response)
 
             st.session_state.messages.append({"role": "assistant", "content": answer})
-            st.markdown(answer)
+            st.write(answer)
 
             # Show sources
             if hasattr(response, "source_nodes"):
-                st.markdown("### 📌 Sources")
+                st.write("### Sources:")
                 for src in response.source_nodes:
-                    st.markdown(f"- **{src.node.doc_id}**")
+                    st.write(f"- {src.node.get('doc_id', 'Unknown File')}")
 
             # Download answer
             st.download_button(
-                label="Download Response",
-                data=answer,
-                file_name="lexiview_answer.txt",
+                "Download Answer",
+                answer,
+                file_name="response.txt",
                 mime="text/plain"
             )
